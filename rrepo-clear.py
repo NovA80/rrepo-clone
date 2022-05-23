@@ -3,7 +3,8 @@
 """
 RPM Repository clone clear
 
-Deletes files from local repository clone not listed in the repo
+Deletes files not listed in the repository from its local clone. Only repo
+subdir contents are cleaned, any additional top level objects remains unchanged.
 
 @author: Andrey Novikov aka NovA
 """
@@ -16,6 +17,7 @@ import gzip
 # program context (repo dir, ...)
 class Ctx:
     repofiles = set()
+    repodirs = set()
 
 ctx = Ctx()
 
@@ -32,6 +34,7 @@ def parse_cmdline():
 def accfile(fn: str, size: int = -1):
     """Account file in the repo and return full path"""
     ctx.repofiles.add(fn)
+    ctx.repodirs.add(str(pathlib.Path(fn).parent))
     print(f"Accounting files in the repo... {len(ctx.repofiles)}", end='\r')
     return str(pathlib.Path(ctx.basedir, fn))
 #
@@ -67,17 +70,20 @@ if __name__ == "__main__":
                 e.clear()  # !!! a must, memory hog otherwise
     print('')
 
-    # Clear old files not in the repo
+    print(f"Processing subdirs: {sorted(ctx.repodirs)}...")
     ndelfiles = 0
-    for p in pathlib.Path(ctx.basedir).rglob('*'):  # all local files
-        if not p.is_file():
-            continue
-
-        fn = str(p.relative_to(ctx.basedir))
-        if not fn in ctx.repofiles:
-            p.unlink()
-            print(f'  {fn} deleted')
-            ndelfiles += 1
+    for d in ctx.repodirs:
+        dd = pathlib.Path(ctx.basedir, d)
+        if not dd.is_dir():
+            continue;
+        for f in dd.iterdir():
+            if not f.is_file():
+                continue
+            fn = str(f.relative_to(ctx.basedir))
+            if not fn in ctx.repofiles:
+                f.unlink()
+                print(f'  {fn} deleted')
+                ndelfiles += 1
     
     print("---")
     print(f"{ndelfiles} old files have been deleted")

@@ -22,6 +22,7 @@ httpSes = requests.Session()
 # program context (base url, destination dir, ...)
 class Ctx:
     repofiles = set()
+    repodirs = set()
     nnewfiles = 0
 
 ctx = Ctx()
@@ -72,6 +73,7 @@ def download(fn: str, size: int = -1):
         ctx.nnewfiles += 1
 
     ctx.repofiles.add(fn)
+    ctx.repodirs.add(str(pathlib.Path(fn).parent))
     return str(path)
 #
 
@@ -115,17 +117,20 @@ if __name__ == "__main__":
     if not ctx.noclean:
         print("\n"
               "---\n"
-             f"--- Cleaning old files in {ctx.basedir}\n"
+             f"--- Cleaning old files in {ctx.basedir}/{ctx.repodirs}\n"
               "---")
-        for p in pathlib.Path(ctx.basedir).rglob('*'):  # all local files
-            if not p.is_file():
-                continue
-
-            fn = str(p.relative_to(ctx.basedir))
-            if not fn in ctx.repofiles:
-                p.unlink()
-                print(f'{fn} deleted')
-                ndelfiles += 1
+        for d in ctx.repodirs:
+            dd = pathlib.Path(ctx.basedir, d)
+            if not dd.is_dir():
+                continue;
+            for f in dd.iterdir():
+                if not f.is_file():
+                    continue
+                fn = str(f.relative_to(ctx.basedir))
+                if not fn in ctx.repofiles:
+                    f.unlink()
+                    print(f'{fn} deleted')
+                    ndelfiles += 1
     
     print("\n"
           "---\n"
