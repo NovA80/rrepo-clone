@@ -42,6 +42,8 @@ def parse_cmdline():
                         help='architecture(s) to download packages for, may be specified multiple times')
     parser.add_argument('--noclean', action='store_true', default=False,
                         help="don't delete old packages not in the repo")
+    parser.add_argument('--verbose', '-v', action='store_true', default=False,
+                        help="be more verbose, report existing packages")
     parser.parse_args(namespace=ctx)
 #
 
@@ -59,7 +61,8 @@ def download(fn: str, size: int = -1):
     """
     path = pathlib.Path(ctx.basedir, fn)
     if path.exists() and path.stat().st_size == size:
-        print(f'{fn} exists')
+        if ctx.verbose:
+            print(f'{fn} exists')
     else:
         url = requests.compat.urljoin(ctx.baseurl, fn)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,7 +85,7 @@ if __name__ == "__main__":
     parse_cmdline()
 
     print("---\n"
-         f"--- Cloning {ctx.baseurl} archs {ctx.arch}\n"
+         f"--- Cloning {ctx.baseurl}, archs {ctx.arch}\n"
          f"--- to {ctx.basedir}\n"
           "---")
 
@@ -117,7 +120,7 @@ if __name__ == "__main__":
     if not ctx.noclean:
         print("\n"
               "---\n"
-             f"--- Cleaning old files in {ctx.basedir}/{ctx.repodirs}\n"
+             f"--- Cleaning old files in {ctx.basedir}{ctx.repodirs}\n"
               "---")
         for d in ctx.repodirs:
             dd = pathlib.Path(ctx.basedir, d)
