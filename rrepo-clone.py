@@ -16,6 +16,7 @@ import time
 import pathlib
 import xml.etree.ElementTree as ET
 import gzip
+import shutil
 
 # persistent TCP connection
 httpSes = requests.Session()
@@ -26,6 +27,7 @@ connRetryDelay = 20
 
 # program context (base url, destination dir, ...)
 class Ctx:
+    ishttp: bool = None
     repofiles = set()
     repodirs = set()
     nnewfiles = 0
@@ -34,11 +36,11 @@ class Ctx:
 ctx = Ctx()
 
 def parse_cmdline():
-    """Parse command line arguments and update `ctx`"""
+    """Parse command line arguments, update `ctx`"""
     
     parser = argparse.ArgumentParser()
-    parser.add_argument('baseurl', metavar="http://source/url/",
-                        help="Source http(s) url of the RPM repo root dir"
+    parser.add_argument('baseurl', metavar="https://source/url/",
+                        help="Source url ('http(s):' or 'file:') of the RPM repo root dir"
                              "having /repodata/repomd.xml.")
     parser.add_argument('basedir', metavar="/destination/dir/",
                         help="Destination path where all files and metadata "
@@ -51,6 +53,18 @@ def parse_cmdline():
     parser.add_argument('--verbose', '-v', action='store_true', default=False,
                         help="be more verbose, report existing packages")
     parser.parse_args(namespace=ctx)
+    
+    colon = ctx.baseurl.find(':')
+    if colon >= 0:  # protocol is specified
+        if ctx.baseurl.startswith(('http:','https:')):
+            ctx.ishttp = True
+        elif ctx.baseurl.startswith('file:'):  # local filesystem
+            ctx.ishttp = False
+            ctx.baseurl = ctx.baseurl[len('file:/'):]
+        else:
+            printf(f"Unsupported URL protocol. Only http:, https: or file: are required")
+    else:  # protocol is not specified -> local filesystem
+        ctx.ishttp = False
 #
 
 
@@ -65,43 +79,63 @@ def download(fn: str, size: int = -1):
     Returns:
         path of the loaded file
     """
+
+    fmtsize = f" ({size/1024./1024.:.2f} MiB)" if size > 0 else ""
+
     path = pathlib.Path(ctx.basedir, fn)
     if path.exists() and path.stat().st_size == size:
         if ctx.verbose:
             print(f"{fn} exists")
     else:
-        url = requests.compat.urljoin(ctx.baseurl, fn)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        for n in range(connRetries):
-            if n > 0:
-                print(f"Retry in {connRetryDelay} sec...")
-                time.sleep(connRetryDelay)
-            try:
-                print(f"{fn} ({size/1024./1024.:.2f} MiB) ", end='')
-                with httpSes.get(url, stream=True) as r:
-                    r.raise_for_status()
-                    with open(path, "wb") as f:
-                        for chunk in r.iter_content(chunk_size=1024*1024):
-                            f.write(chunk)
-                print(f"downloaded")
-                ctx.nnewfiles += 1
-                break
+        if ctx.ishttp:
+            # Downloading from the Internet
+            #
+            url = requests.compat.urljoin(ctx.baseurl, fn)
 
-            except requests.exceptions.HTTPError as exc:
-                code = exc.response.status_code
-                print("download FAILED")
-                print(exc)
-                if code in [404, 429, 500, 502, 503, 504]:
+            for n in range(connRetries):
+                if n > 0:
+                    print(f"... Retry in {connRetryDelay} sec")
+                    time.sleep(connRetryDelay)
+                try:
+                    print(f"{fn}{fmtsize} ", end='')
+                    with httpSes.get(url, stream=True) as r:
+                        r.raise_for_status()
+                        with open(path, "wb") as f:
+                            for chunk in r.iter_content(chunk_size=1024*1024):
+                                f.write(chunk)
+                    print(f"downloaded")
+                    ctx.nnewfiles += 1
+                    break
+
+                except requests.exceptions.HTTPError as exc:
+                    code = exc.response.status_code
+                    print("download FAILED")
+                    print(exc)
+                    if code in [404, 429, 500, 502, 503, 504]:
+                        continue  # retry
+                    raise exc
+
+                except requests.exceptions.ConnectionError as exc:
+                    print("download FAILED")
+                    print(exc)
                     continue  # retry
-                raise exc
-
-            except requests.exceptions.ConnectionError as exc:
-                print("download FAILED")
-                print(exc)
-                continue  # retry
+            else:  # retries finished
+                ctx.nfailedfiles += 1
         else:
-            ctx.nfailedfiles += 1
+            # Copying from the local filesystem
+            #
+            url = pathlib.Path(ctx.baseurl, fn)
+            print(f"{fn}{fmtsize} ", end='')
+            try:
+                shutil.copyfile(url, path)
+                print(f"copied")
+                ctx.nnewfiles += 1
+            except OSError as exc:
+                print("FAILED to copy")
+                print(exc)
+                ctx.nfailedfiles += 1
 
     ctx.repofiles.add(fn)
     ctx.repodirs.add(str(pathlib.Path(fn).parent))
@@ -109,10 +143,12 @@ def download(fn: str, size: int = -1):
 #
 
 
-if __name__ == "__main__":
+def main():
     parse_cmdline()
+    if ctx.ishttp is None:  return
 
-    print("###\n"
+    print("\n"
+          "###\n"
          f"### Cloning {ctx.baseurl}, archs {ctx.arch}\n"
          f"### to {ctx.basedir}\n"
           "###")
@@ -143,8 +179,9 @@ if __name__ == "__main__":
                 e.clear()  # !!! a must, memory hog otherwise
 
     print("")
-    print(f"--- {ctx.nnewfiles} new files have been downloaded")
-    print(f"--- {ctx.nfailedfiles} files have been FAILED to download")
+    print(f"--- {ctx.nnewfiles} new files have been obtained")
+    if ctx.nfailedfiles > 0:
+        print(f"--- WARNING: {ctx.nfailedfiles} files have been FAILED to obtain")
 
     # Clear old files not in the repo
     ndelfiles = 0
@@ -168,3 +205,7 @@ if __name__ == "__main__":
 
     print(f"\n--- {ndelfiles} old files have been deleted")
 #
+
+
+if __name__ == "__main__":
+    main()
