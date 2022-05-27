@@ -12,6 +12,7 @@ Created on May 2022
 
 import argparse
 import requests
+import time
 import pathlib
 import xml.etree.ElementTree as ET
 import gzip
@@ -19,11 +20,16 @@ import gzip
 # persistent TCP connection
 httpSes = requests.Session()
 
+# Retries on errors
+connRetries = 3
+connRetryDelay = 20
+
 # program context (base url, destination dir, ...)
 class Ctx:
     repofiles = set()
     repodirs = set()
     nnewfiles = 0
+    nfailedfiles = 0
 
 ctx = Ctx()
 
@@ -62,18 +68,40 @@ def download(fn: str, size: int = -1):
     path = pathlib.Path(ctx.basedir, fn)
     if path.exists() and path.stat().st_size == size:
         if ctx.verbose:
-            print(f'{fn} exists')
+            print(f"{fn} exists")
     else:
         url = requests.compat.urljoin(ctx.baseurl, fn)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        with httpSes.get(url, stream=True) as r:
-            r.raise_for_status()
-            with open(path, "wb") as f:
-                for chunk in r.iter_content(chunk_size=1024*1024):
-                    f.write(chunk)
-        print(f'{fn} ({size/1024./1024.:.2f} MiB) downloaded')
-        ctx.nnewfiles += 1
+        for n in range(connRetries):
+            if n > 0:
+                print(f"Retry in {connRetryDelay} sec...")
+                time.sleep(connRetryDelay)
+            try:
+                print(f"{fn} ({size/1024./1024.:.2f} MiB) ", end='')
+                with httpSes.get(url, stream=True) as r:
+                    r.raise_for_status()
+                    with open(path, "wb") as f:
+                        for chunk in r.iter_content(chunk_size=1024*1024):
+                            f.write(chunk)
+                print(f"downloaded")
+                ctx.nnewfiles += 1
+                break
+
+            except requests.exceptions.HTTPError as exc:
+                code = exc.response.status_code
+                print("download FAILED")
+                print(exc)
+                if code in [404, 429, 500, 502, 503, 504]:
+                    continue  # retry
+                raise exc
+
+            except requests.exceptions.ConnectionError as exc:
+                print("download FAILED")
+                print(exc)
+                continue  # retry
+        else:
+            ctx.nfailedfiles += 1
 
     ctx.repofiles.add(fn)
     ctx.repodirs.add(str(pathlib.Path(fn).parent))
@@ -84,10 +112,10 @@ def download(fn: str, size: int = -1):
 if __name__ == "__main__":
     parse_cmdline()
 
-    print("---\n"
-         f"--- Cloning {ctx.baseurl}, archs {ctx.arch}\n"
-         f"--- to {ctx.basedir}\n"
-          "---")
+    print("###\n"
+         f"### Cloning {ctx.baseurl}, archs {ctx.arch}\n"
+         f"### to {ctx.basedir}\n"
+          "###")
 
     # Load metadata files
     metafile: str = ''
@@ -101,9 +129,8 @@ if __name__ == "__main__":
     download('repodata/repomd.xml.asc')
     download('repodata/repomd.xml.key')
 
-
     # Parse metafile & download RPMs
-    print("\n")
+    print("")
     ns = '{http://linux.duke.edu/metadata/common}'  # xml namespace
     with gzip.open(metafile, 'rb') as f:
         for _, e in ET.iterparse(f):
@@ -114,6 +141,10 @@ if __name__ == "__main__":
                     sz = int(e.find(f'{ns}size').get('package'))
                     download(fn, sz)
                 e.clear()  # !!! a must, memory hog otherwise
+
+    print("")
+    print(f"--- {ctx.nnewfiles} new files have been downloaded")
+    print(f"--- {ctx.nfailedfiles} files have been FAILED to download")
 
     # Clear old files not in the repo
     ndelfiles = 0
@@ -134,11 +165,6 @@ if __name__ == "__main__":
                     f.unlink()
                     print(f'{fn} deleted')
                     ndelfiles += 1
-    
-    print("\n"
-          "---\n"
-         f"--- Repository {ctx.baseurl} clone finished\n"
-          "---")
-    print(f"{ctx.nnewfiles} new files have been downloaded")
-    print(f"{ndelfiles} old files have been deleted")
+
+    print(f"\n--- {ndelfiles} old files have been deleted")
 #
