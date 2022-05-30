@@ -60,8 +60,8 @@ def parse_cmdline():
     """Parses command line arguments and updates `ctx`"""
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('baseurl', metavar="https://source/url/",
-                        help="Source url ('http(s):' or 'file:') of the RPM repo root dir"
+    parser.add_argument('baseurl', metavar="http(s)://source/url/",
+                        help="Source url ('http:', 'https' or 'file:') of the RPM repo root dir "
                              "having /repodata/repomd.xml.")
     parser.add_argument('basedir', metavar="/destination/dir/",
                         help="Destination path where all files and metadata "
@@ -74,7 +74,7 @@ def parse_cmdline():
     parser.add_argument('--verbose', '-v', action='store_true', default=False,
                         help="be more verbose, report existing packages")
     parser.add_argument('--log', metavar="FILE",
-                        help="additionally log messages to FILE")
+                        help="additionally append log messages to FILE")
     parser.parse_args(namespace=ctx)
 
     colon = ctx.baseurl.find(':')
@@ -184,9 +184,10 @@ def main():
     metafile: str = ''
     repomd = ET.parse(download('repodata/repomd.xml'))
     ns = '{http://linux.duke.edu/metadata/repo}'  # xml namespace
-    for e in repomd.findall(f'{ns}data/{ns}location'):
-        fn = e.get('href')
-        path = download(fn)
+    for e in repomd.findall(f'{ns}data'):
+        fn = e.find(f'{ns}location').get('href')
+        sz = int(e.find(f'{ns}size').text)
+        path = download(fn, sz)
         if fn.endswith('primary.xml.gz'):
             metafile = path
     download('repodata/repomd.xml.asc')
