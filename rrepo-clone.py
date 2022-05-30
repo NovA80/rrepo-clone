@@ -17,6 +17,8 @@ import pathlib
 import xml.etree.ElementTree as ET
 import gzip
 import shutil
+import sys
+######################
 
 # persistent TCP connection
 httpSes = requests.Session()
@@ -25,8 +27,8 @@ httpSes = requests.Session()
 connRetries = 3
 connRetryDelay = 20
 
-# program context (base url, destination dir, ...)
 class Ctx:
+    """ Application context, includes cmdline args """
     ishttp: bool = None
     repofiles = set()
     repodirs = set()
@@ -35,9 +37,28 @@ class Ctx:
 
 ctx = Ctx()
 
+
+class Logger():
+    """ Logging both stdout & file """
+    def __init__(self, fn:str = ''):
+        self.con = sys.stdout
+        self.file = open(fn, 'at') if fn else None
+
+    def write(self, message):
+        self.con.write(message)
+        if self.file:
+            self.file.write(message)
+
+    def flush(self):
+        self.con.flush()
+        if self.file:
+            self.file.flush()
+#
+
+
 def parse_cmdline():
-    """Parse command line arguments, update `ctx`"""
-    
+    """Parses command line arguments and updates `ctx`"""
+
     parser = argparse.ArgumentParser()
     parser.add_argument('baseurl', metavar="https://source/url/",
                         help="Source url ('http(s):' or 'file:') of the RPM repo root dir"
@@ -52,8 +73,10 @@ def parse_cmdline():
                         help="don't delete old packages not in the repo")
     parser.add_argument('--verbose', '-v', action='store_true', default=False,
                         help="be more verbose, report existing packages")
+    parser.add_argument('--log', metavar="FILE",
+                        help="additionally log messages to FILE")
     parser.parse_args(namespace=ctx)
-    
+
     colon = ctx.baseurl.find(':')
     if colon >= 0:  # protocol is specified
         if ctx.baseurl.startswith(('http:','https:')):
@@ -99,7 +122,7 @@ def download(fn: str, size: int = -1):
                     print(f"... Retry in {connRetryDelay} sec")
                     time.sleep(connRetryDelay)
                 try:
-                    print(f"{fn}{fmtsize} ", end='')
+                    print(f"{fn}{fmtsize} ", end='', flush=True)
                     with httpSes.get(url, stream=True) as r:
                         r.raise_for_status()
                         with open(path, "wb") as f:
@@ -122,6 +145,7 @@ def download(fn: str, size: int = -1):
                     print(exc)
                     continue  # retry
             else:  # retries finished
+                print("ERROR: package skipped")
                 ctx.nfailedfiles += 1
         else:
             # Copying from the local filesystem
@@ -146,6 +170,9 @@ def download(fn: str, size: int = -1):
 def main():
     parse_cmdline()
     if ctx.ishttp is None:  return
+
+    # Logging
+    sys.stdout = Logger(ctx.log)
 
     print("\n"
           "###\n"
