@@ -28,12 +28,13 @@ connRetries = 3
 connRetryDelay = 20
 
 class Ctx:
-    """ Application context, includes cmdline args """
+    """Application context"""
     ishttp: bool = None
     repofiles = set()
     repodirs = set()
-    nnewfiles = 0
-    nfailedfiles = 0
+    nnewfiles: int = 0
+    nfailedfiles: int = 0
+    ndownsize: float = 0.0
 
 ctx = Ctx()
 
@@ -123,13 +124,16 @@ def download(fn: str, size: int = -1):
                     time.sleep(connRetryDelay)
                 try:
                     print(f"{fn}{fmtsize} ", end='', flush=True)
+                    downsize = 0
                     with httpSes.get(url, stream=True) as r:
                         r.raise_for_status()
                         with open(path, "wb") as f:
                             for chunk in r.iter_content(chunk_size=1024*1024):
+                                downsize += len(chunk)
                                 f.write(chunk)
                     print(f"downloaded")
                     ctx.nnewfiles += 1
+                    ctx.ndownsize += downsize
                     break
 
                 except requests.exceptions.HTTPError as exc:
@@ -156,6 +160,7 @@ def download(fn: str, size: int = -1):
                 shutil.copyfile(url, path)
                 print(f"copied")
                 ctx.nnewfiles += 1
+                ctx.ndownsize += url.stat().st_size
             except OSError as exc:
                 print("FAILED to copy")
                 print(exc)
@@ -207,7 +212,7 @@ def main():
                 e.clear()  # !!! a must, memory hog otherwise
 
     print("")
-    print(f"--- {ctx.nnewfiles} new files have been obtained")
+    print(f"--- {ctx.nnewfiles} new files ({ctx.ndownsize/1024./1024.:.2f} MiB) have been obtained")
     if ctx.nfailedfiles > 0:
         print(f"--- WARNING: {ctx.nfailedfiles} files have been FAILED to obtain")
 
